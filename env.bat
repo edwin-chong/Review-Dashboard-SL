@@ -1,4 +1,4 @@
 @echo off
-cd "C:\Users\edwin\Documents\GitHub\Google-Map-Review-Analyzer\frontend\stEnv"
+cd "C:\Users\edwin\Documents\GitHub\Review-Dashboard-SL\venv"
 call Scripts\activate
-cd "C:\Users\edwin\Documents\GitHub\Google-Map-Review-Analyzer\frontend"
+cd "C:\Users\edwin\Documents\GitHub\Review-Dashboard-SL"
