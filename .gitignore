@@ -1,2 +1,5 @@
 
-/scrapeEnv
+/venv
+env.bat
+.env
+/.streamlit

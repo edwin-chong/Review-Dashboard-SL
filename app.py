@@ -5,98 +5,36 @@ import altair as alt
 from st_keyup import st_keyup
 from streamlit_autorefresh import st_autorefresh
 import os
-from dotenv import load_dotenv
+import urllib.parse
 
-load_dotenv()
-# Display in wide mode
-st.set_page_config(layout="wide")
-base_url = os.getenv('FLASK_APP_URL')
-# base_url = 'http://127.0.0.1:5000'
-# if os.getenv('PRODUCTION') == 'True':
-#     base_url= 'http://127.0.0.1:80'
-# else:
-#     print('not in production')
-
-##################### Read Data #####################
-def get_all_reviews():
-    url = f'{base_url}/reviews'
-
+def get_restaurant_names():
+    url = f'{base_url}/restaurants'
     response = requests.get(url)
-    df = pd.DataFrame()
+    if response.status_code == 200:
+        data = response.json()
+        return data.get('restaurants', [])
+    else:
+        print(f"Failed to get restaurants. Status code: {response.status_code}")
+        return ''
+
+def get_reviews(restaurant_name):
+    url = f'{base_url}/reviews/{restaurant_name}'
+    response = requests.get(url)
     if response.status_code == 200:
         reviews = response.json()
-        df = pd.DataFrame(reviews)
+        return pd.DataFrame(reviews)
     else:
         print(f"Failed to get reviews. Status code: {response.status_code}")
-    return df
-
-dynamo = True
-if dynamo:
-    df = get_all_reviews()
-else:
-    csv_file_path = 'data/merged1.csv'
-    df = pd.read_csv(csv_file_path)
-
-# Convert 'date_of_review' to datetime format with the correct format
-df['DateOfReview'] = pd.to_datetime(df['DateOfReview'], format='%Y-%m-%d')
-df = df.sort_values(by='DateOfReview', ascending=False)
-
-# Create a new column for the month and year
-df['month_year'] = df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
-df['DateOfReview'] = df['DateOfReview'].dt.date
-
-df['StarRating'] = pd.to_numeric(df['StarRating'])
-
-##################### Sidebar #####################
-# Add a sidebar with a dropdown list to choose the restaurant
-restaurant_names = df['source'].unique()
-# def get_restaurant_names():
-#     url = 'f'{base_url}/restaurants'
-#     response = requests.get(url)
-#     if response.status_code == 200:
-#         data = response.json()
-#         return data.get('restaurants', [])
-#     else:
-#         print(f"Failed to get restaurants. Status code: {response.status_code}")
-#         return 'Error Retrieving Database'
+        return pd.DataFrame(columns=["reviewId", "source", "DateOfReview", "ReviewDescription", "StarRating", "month_year"])
     
-# restaurant_names = get_restaurant_names()
 
-# Sidebar with search bar and dropdown
-st.sidebar.header('Restaurant Selection')
-
-
-# Initialize session state variables
-if 'filtered_restaurant_names' not in st.session_state:
-    st.session_state.filtered_restaurant_names = restaurant_names
-if 'request_id' not in st.session_state:
-    st.session_state.request_id = None
-if 'request_res' not in st.session_state:
-    st.session_state.request_res = None
-if 'status' not in st.session_state:
-    st.session_state.status = None
-# if 'search_term' not in st.session_state:
-#     st.session_state.status = ''
-
-
-# Create a container in the sidebar for keyup functionality
-with st.sidebar:
-    # Text input for searching in the sidebar
-    search_term = st_keyup("Enter a value", key="0")
-
-    # Update session state with the search term
-    st.session_state.search_term = search_term
-
-# Update the filtered restaurant names based on the search term
-if st.session_state.search_term:
-    st.session_state.filtered_restaurant_names = [name for name in restaurant_names if st.session_state.search_term.lower() in name.lower()]
-else:
-    st.session_state.filtered_restaurant_names = restaurant_names 
-
-# Dropdown list with filtered restaurant names
-selected_restaurant = st.sidebar.selectbox('Select a restaurant:', st.session_state.filtered_restaurant_names)
-# Display the selected restaurant (for demonstration purposes)
-st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
+# Function to handle the status polling
+def poll_status():
+    if st.session_state.request_id:
+        status_url = f'{base_url}/status/{st.session_state.request_id}'
+        response = requests.get(status_url)
+        status = response.json().get('status')
+        st.session_state.status = status
 
 def send_scraping_request(res_name, loc_name, review_limit):
     url = f'{base_url}/scrape'
@@ -108,8 +46,46 @@ def send_scraping_request(res_name, loc_name, review_limit):
     response = requests.post(url, json=data)
     request_id = response.json().get('request_id')
     return request_id
-    # st.sidebar.write(response.json())
 
+# Display in wide mode
+st.set_page_config(layout="wide")
+base_url= st.secrets["FLASK_APP_URL"]
+
+
+##################### Sidebar #####################
+# Sidebar with search bar and dropdown
+st.sidebar.header('Restaurant Selection')
+restaurant_names = get_restaurant_names()
+
+# Create a container in the sidebar for keyup functionality
+with st.sidebar:
+    # Text input for searching in the sidebar
+    search_term = st_keyup("Enter a value", key="0")
+
+    # Update session state with the search term
+    st.session_state.search_term = search_term
+
+# Initialize session state variables
+if 'filtered_restaurant_names' not in st.session_state:
+    st.session_state.filtered_restaurant_names = restaurant_names
+if 'request_id' not in st.session_state:
+    st.session_state.request_id = None
+if 'request_res' not in st.session_state:
+    st.session_state.request_res = None
+if 'status' not in st.session_state:
+    st.session_state.status = None
+
+# Dropdown list with filtered restaurant names
+selected_restaurant = st.sidebar.selectbox('Select a restaurant:', st.session_state.filtered_restaurant_names)
+
+# Update the filtered restaurant names based on the search term
+if st.session_state.search_term:
+    st.session_state.filtered_restaurant_names = [name for name in restaurant_names if st.session_state.search_term.lower() in name.lower()]
+else:
+    st.session_state.filtered_restaurant_names = restaurant_names 
+
+
+##################### Injected Javascript #####################
 # JavaScript to periodically poll for status updates
 polling_js = """
 <script>
@@ -127,24 +103,22 @@ function pollStatus() {
 setTimeout(pollStatus, 80);
 </script>
 """
-
 # Inject the JavaScript into the Streamlit app
 st.markdown(polling_js, unsafe_allow_html=True)
-
-# Function to handle the status polling
-def poll_status():
-    if st.session_state.request_id:
-        status_url = f'{base_url}/status/{st.session_state.request_id}'
-        response = requests.get(status_url)
-        status = response.json().get('status')
-        st.session_state.status = status
-
+# Auto poll on intervals
 if st.session_state.request_id:
     st_autorefresh(interval=80, key="poll_status")
     print('Check status')
     poll_status()
+################################################################
 
-if len(st.session_state.filtered_restaurant_names) == 0:
+
+##################### Main Content #####################
+# Display the selected restaurant
+st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
+encoded_restaurant_name = urllib.parse.quote(selected_restaurant)
+selected_df = get_reviews(encoded_restaurant_name)
+if selected_df.empty:
     st.sidebar.subheader(':red[Restaurant not found!]')
     st.sidebar.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
 
@@ -157,13 +131,38 @@ if len(st.session_state.filtered_restaurant_names) == 0:
         st.session_state.res_name = res_name
         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
         st.session_state.status = 'In Progress'
-        
-
-    selected_df = pd.DataFrame(columns=df.columns)
 else:
-    # Filter the DataFrame for the selected restaurant
-    selected_df = df[df['source'] == selected_restaurant]
+    # Format df columns
+    selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
+    selected_df = selected_df.sort_values(by='DateOfReview', ascending=False)
+    selected_df['StarRating'] = pd.to_numeric(selected_df['StarRating'])
+    selected_df['month_year'] = selected_df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
+    selected_df['DateOfReview'] = selected_df['DateOfReview'].dt.date
     selected_df = selected_df.reset_index(drop=True)
+    
+
+
+
+# # Display button to generate new data if restaurant not found
+# if len(st.session_state.filtered_restaurant_names) == 0:
+#     st.sidebar.subheader(':red[Restaurant not found!]')
+#     st.sidebar.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
+
+#     res_name = st.sidebar.text_input('Name of restaurant')
+#     loc_name = st.sidebar.text_input('Location/Branch?')
+#     review_limit = st.sidebar.number_input('Maximum no. of reviews to fetch:', min_value=1, value=100, step=1)
+
+#     generate_new_data = st.sidebar.button('Generate new data')
+#     if generate_new_data:
+#         st.session_state.res_name = res_name
+#         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
+#         st.session_state.status = 'In Progress'
+        
+#     # selected_df = pd.DataFrame(columns=df.columns)
+# else:
+#     # Filter the DataFrame for the selected restaurant
+#     selected_df = df[df['source'] == selected_restaurant]
+#     selected_df = selected_df.reset_index(drop=True)
 
 
 # Display status updates
@@ -178,8 +177,6 @@ if st.session_state.status:
         st.session_state.status = None
     elif 'In Progress' in st.session_state.status:
         st.toast(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
-
-print(st.session_state)
 
 col1, col2 = st.columns(2)
 with col1:
