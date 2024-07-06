@@ -1,32 +1,32 @@
+import boto3
+import json
 import pandas as pd
 import streamlit as st
 import requests
 import altair as alt
 from st_keyup import st_keyup
 from streamlit_autorefresh import st_autorefresh
-import os
-import urllib.parse
 
-def get_restaurant_names():
-    url = f'{base_url}/restaurants'
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        return data.get('restaurants', [])
-    else:
-        print(f"Failed to get restaurants. Status code: {response.status_code}")
-        return ''
+# Initialize the S3 client
+s3 = boto3.client('s3')
 
-def get_reviews(restaurant_name):
-    url = f'{base_url}/reviews/{restaurant_name}'
-    response = requests.get(url)
-    if response.status_code == 200:
-        reviews = response.json()
-        return pd.DataFrame(reviews)
-    else:
-        print(f"Failed to get reviews. Status code: {response.status_code}")
-        return pd.DataFrame(columns=["reviewId", "source", "DateOfReview", "ReviewDescription", "StarRating", "month_year"])
-    
+# Define the bucket name and the file name
+bucket_name = st.secrets["S3_BUCKET_NAME"]
+json_file_name = st.secrets["S3_JSON_NAME"]
+
+# Function to read JSON file from S3 and return list of restaurants
+def get_restaurants_from_s3(bucket_name, json_file_name):
+    response = s3.get_object(Bucket=bucket_name, Key=json_file_name)
+    json_data = response['Body'].read().decode('utf-8')
+    data = json.loads(json_data)
+    restaurants = list(data.keys())
+    return restaurants, data
+
+# Function to convert reviews of a selected restaurant to DataFrame
+def convert_to_dataframe(data, restaurant_name):
+    reviews = data[restaurant_name]
+    df = pd.DataFrame(reviews)
+    return df
 
 # Function to handle the status polling
 def poll_status():
@@ -55,7 +55,8 @@ base_url= st.secrets["FLASK_APP_URL"]
 ##################### Sidebar #####################
 # Sidebar with search bar and dropdown
 st.sidebar.header('Restaurant Selection')
-restaurant_names = get_restaurant_names()
+# restaurant_names = get_restaurant_names()
+restaurant_names, data = get_restaurants_from_s3(bucket_name, json_file_name)
 
 # Create a container in the sidebar for keyup functionality
 with st.sidebar:
@@ -116,9 +117,7 @@ if st.session_state.request_id:
 ##################### Main Content #####################
 # Display the selected restaurant
 st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
-encoded_restaurant_name = urllib.parse.quote(selected_restaurant)
-selected_df = get_reviews(encoded_restaurant_name)
-if selected_df.empty:
+if selected_restaurant not in restaurant_names:
     st.sidebar.subheader(':red[Restaurant not found!]')
     st.sidebar.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
 
@@ -133,6 +132,8 @@ if selected_df.empty:
         st.session_state.status = 'In Progress'
 else:
     # Format df columns
+    selected_df = convert_to_dataframe(data, selected_restaurant)
+
     selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
     selected_df = selected_df.sort_values(by='DateOfReview', ascending=False)
     selected_df['StarRating'] = pd.to_numeric(selected_df['StarRating'])
