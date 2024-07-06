@@ -6,6 +6,7 @@ import requests
 import altair as alt
 from st_keyup import st_keyup
 from streamlit_autorefresh import st_autorefresh
+from functools import lru_cache
 
 # Initialize the S3 client
 s3 = boto3.client('s3')
@@ -14,19 +15,21 @@ s3 = boto3.client('s3')
 bucket_name = st.secrets["S3_BUCKET_NAME"]
 json_file_name = st.secrets["S3_JSON_NAME"]
 
-# Function to read JSON file from S3 and return list of restaurants
-def get_restaurants_from_s3(bucket_name, json_file_name):
+@st.cache_data(ttl=3600)  # Cache the processed data for 1 hour
+def load_and_process_data(bucket_name, json_file_name):
     response = s3.get_object(Bucket=bucket_name, Key=json_file_name)
     json_data = response['Body'].read().decode('utf-8')
     data = json.loads(json_data)
-    restaurants = list(data.keys())
-    return restaurants, data
-
-# Function to convert reviews of a selected restaurant to DataFrame
-def convert_to_dataframe(data, restaurant_name):
-    reviews = data[restaurant_name]
-    df = pd.DataFrame(reviews)
-    return df
+    processed_data = {}
+    for restaurant, reviews in data.items():
+        df = pd.DataFrame(reviews)
+        df['DateOfReview'] = pd.to_datetime(df['DateOfReview'], format='%Y-%m-%d')
+        df = df.sort_values(by='DateOfReview', ascending=False)
+        df['StarRating'] = pd.to_numeric(df['StarRating'])
+        df['month_year'] = df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
+        df['DateOfReview'] = df['DateOfReview'].dt.date
+        processed_data[restaurant] = df.reset_index(drop=True)
+    return list(data.keys()), processed_data
 
 # Function to handle the status polling
 def poll_status():
@@ -56,7 +59,7 @@ base_url= st.secrets["FLASK_APP_URL"]
 # Sidebar with search bar and dropdown
 st.sidebar.header('Restaurant Selection')
 # restaurant_names = get_restaurant_names()
-restaurant_names, data = get_restaurants_from_s3(bucket_name, json_file_name)
+restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
 
 # Create a container in the sidebar for keyup functionality
 with st.sidebar:
@@ -131,53 +134,28 @@ if selected_restaurant not in restaurant_names:
         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
         st.session_state.status = 'In Progress'
 else:
+    selected_df = data[selected_restaurant]
     # Format df columns
-    selected_df = convert_to_dataframe(data, selected_restaurant)
-
     selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
     selected_df = selected_df.sort_values(by='DateOfReview', ascending=False)
     selected_df['StarRating'] = pd.to_numeric(selected_df['StarRating'])
     selected_df['month_year'] = selected_df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
     selected_df['DateOfReview'] = selected_df['DateOfReview'].dt.date
     selected_df = selected_df.reset_index(drop=True)
-    
 
 
-
-# # Display button to generate new data if restaurant not found
-# if len(st.session_state.filtered_restaurant_names) == 0:
-#     st.sidebar.subheader(':red[Restaurant not found!]')
-#     st.sidebar.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
-
-#     res_name = st.sidebar.text_input('Name of restaurant')
-#     loc_name = st.sidebar.text_input('Location/Branch?')
-#     review_limit = st.sidebar.number_input('Maximum no. of reviews to fetch:', min_value=1, value=100, step=1)
-
-#     generate_new_data = st.sidebar.button('Generate new data')
-#     if generate_new_data:
-#         st.session_state.res_name = res_name
-#         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
-#         st.session_state.status = 'In Progress'
-        
-#     # selected_df = pd.DataFrame(columns=df.columns)
-# else:
-#     # Filter the DataFrame for the selected restaurant
-#     selected_df = df[df['source'] == selected_restaurant]
-#     selected_df = selected_df.reset_index(drop=True)
-
-
-# Display status updates
-if st.session_state.status:
-    if st.session_state.status == 'Completed':
-        st.toast(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
-        st.session_state.request_id = None
-        st.session_state.status = None
-    elif 'Failed' in st.session_state.status:
-        st.toast(f':large_orange_circle: Scraping request for {st.session_state.res_name} has failed. Please try again with a different name')
-        st.session_state.request_id = None
-        st.session_state.status = None
-    elif 'In Progress' in st.session_state.status:
-        st.toast(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
+# # Display status updates
+# if st.session_state.status:
+#     if st.session_state.status == 'Completed':
+#         st.toast(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
+#         st.session_state.request_id = None
+#         st.session_state.status = None
+#     elif 'Failed' in st.session_state.status:
+#         st.toast(f':large_orange_circle: Scraping request for {st.session_state.res_name} has failed. Please try again with a different name')
+#         st.session_state.request_id = None
+#         st.session_state.status = None
+#     elif 'In Progress' in st.session_state.status:
+#         st.toast(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
 
 col1, col2 = st.columns(2)
 with col1:
@@ -213,7 +191,7 @@ chart = alt.Chart(grouped).mark_bar().encode(
 
 ##################### Time Series Line Chart #####################
 # Group by 'month_year' and calculate the average star rating for each month
-monthly_avg = round(filtered_df.groupby('month_year')['StarRating'].mean().reset_index(),2)
+monthly_avg = round(filtered_df.groupby('month_year')['StarRating'].mean().reset_index(), 2)
 
 # Create the line chart using Altair with tooltips and point markers
 line_chart = alt.Chart(monthly_avg).mark_line(point=True).encode(
