@@ -4,4 +4,4 @@ env.bat
 .env
 /.streamlit
 readS3.py
-clearSession.py
+/test
