@@ -133,6 +133,8 @@ if selected_restaurant not in restaurant_names:
         st.session_state.res_name = res_name
         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
         st.session_state.status = 'In Progress'
+
+    selected_df = pd.DataFrame(columns=['DateOfReview', 'StarRating', 'month_year', 'ReviewDescription'])
 else:
     selected_df = data[selected_restaurant]
     # Format df columns
@@ -174,13 +176,13 @@ with col2:
 
 ##################### Bar Chart #####################
 # Group by 'StarRating' and count the occurrences
-grouped = filtered_df.groupby('StarRating').size().reset_index(name='Count')
+ratingGroupedDf = filtered_df.groupby('StarRating').size().reset_index(name='Count')
 
 # Calculate the average star rating
 average_rating = round(filtered_df['StarRating'].mean(),2)
 
 # Create the bar chart using Altair
-chart = alt.Chart(grouped).mark_bar().encode(
+chart = alt.Chart(ratingGroupedDf).mark_bar().encode(
     x=alt.X('StarRating:N', title='Star Rating', axis=alt.Axis(labelAngle=0)),
     y=alt.Y('Count:Q', title='Count'),
 ).properties(
@@ -190,18 +192,24 @@ chart = alt.Chart(grouped).mark_bar().encode(
 
 
 ##################### Time Series Line Chart #####################
-# Group by 'month_year' and calculate the average star rating for each month
-monthly_avg = round(filtered_df.groupby('month_year')['StarRating'].mean().reset_index(), 2)
+# Group by 'month_year' and calculate the average star rating and count for each month
+monthlyGroupedDf = filtered_df.groupby('month_year')['StarRating'].agg(['mean', 'count']).reset_index()
+monthlyGroupedDf.columns = ['Date', 'Star Rating', 'Num_Reviews']
+
+# Round the StarRating to 2 decimal places
+monthlyGroupedDf['Star Rating'] = round(monthlyGroupedDf['Star Rating'], 2)
+print(monthlyGroupedDf.head(5))
 
 # Create the line chart using Altair with tooltips and point markers
-line_chart = alt.Chart(monthly_avg).mark_line(point=True).encode(
-    x=alt.X('month_year:T', title='Month/Year'),
-    y=alt.Y('StarRating:Q', title='Average Star Rating'),
-    tooltip=['month_year:T', 'StarRating:Q']
+line_chart = alt.Chart(monthlyGroupedDf).mark_line(point=True).encode(
+    x=alt.X('Date:T', title='Date [Month]'),
+    y=alt.Y('Star Rating:Q', title='Average Star Rating'),
+    tooltip=['Date:T', 'Star Rating:Q', 'Num_Reviews:Q']
 ).properties(
     width=600,
     height=200
 )
+
 # .interactive()
 
 ##################### Display Charts Side by Side #####################
