@@ -50,12 +50,202 @@ def send_scraping_request(res_name, loc_name, review_limit):
     request_id = response.json().get('request_id')
     return request_id
 
+def analyze_reviews(df):
+    url = f'{base_url}/analyze'
+    data = {
+        "reviews": df.to_dict(orient='records')
+    }
+    response = requests.post(url, json=data)
+    if response.status_code == 200:
+        print("Success:")
+        print(response)
+        return response.json()
+        # result = []
+        # for response in responses:
+        #     result.append(response.choices[0].message.content)
+        # return result
+    else:
+        print(f"Request failed with status code: {response.status_code}")
+        print(response.text)
+        return f"Error: {response.status_code} - {response.text}"
+    
+def split_response(response):
+    
+    parts = response['summary'].split('\n\n')
+    
+    # The first part is the summary
+    summary = ':'.join(parts[0].split(':')[1:]).strip()
+    
+    # The second part contains the pros, split by new lines after the first line
+    pros = [line.strip('- ') for line in parts[1].split('\n')[1:]]
+    
+    # The third part contains the cons, split by new lines after the first line
+    cons = [line.strip('- ') for line in parts[2].split('\n')[1:]]
+    
+    return summary, pros, cons
+
+
+def display_charts():
+    col1, col2 = st.columns(2)
+    with col1:
+        show_empty_reviews = st.checkbox('Include reviews with no description', True)
+    with col2:
+        # Count the number of empty and non-empty reviews
+        empty_reviews_count = (selected_df['ReviewDescription'] == 'No description provided').sum()
+        non_empty_reviews_count = len(selected_df) - empty_reviews_count
+
+        if show_empty_reviews:
+            filtered_df = selected_df
+            st.write(f"Displaying {selected_df.shape[0]} Total Reviews ({empty_reviews_count} with no description)")
+        else:
+            filtered_df = selected_df[selected_df['ReviewDescription'] != 'No description provided']
+            st.write(f"Displaying {len(filtered_df)} reviews")
+
+    ##################### Bar Chart #####################
+    # Group by 'StarRating' and count the occurrences
+    ratingGroupedDf = filtered_df.groupby('StarRating').size().reset_index(name='Count')
+
+    # Calculate the average star rating
+    average_rating = round(filtered_df['StarRating'].mean(),2)
+
+    # Create the bar chart using Altair
+    chart = alt.Chart(ratingGroupedDf).mark_bar().encode(
+        x=alt.X('StarRating:N', title='Star Rating', axis=alt.Axis(labelAngle=0)),
+        y=alt.Y('Count:Q', title='Count'),
+    ).properties(
+        width=600,
+        height=200
+    )
+
+
+    ##################### Time Series Line Chart #####################
+    # Group by 'month_year' and calculate the average star rating and count for each month
+    monthlyGroupedDf = filtered_df.groupby('month_year')['StarRating'].agg(['mean', 'count']).reset_index()
+    monthlyGroupedDf.columns = ['Date', 'Star Rating', 'Num_Reviews']
+
+    # Round the StarRating to 2 decimal places
+    monthlyGroupedDf['Star Rating'] = round(monthlyGroupedDf['Star Rating'], 2)
+    # print(monthlyGroupedDf.head(5))
+
+    # Create the line chart using Altair with tooltips and point markers
+    line_chart = alt.Chart(monthlyGroupedDf).mark_line(point=True).encode(
+        x=alt.X('Date:T', title='Date [Month]'),
+        y=alt.Y('Star Rating:Q', title='Average Star Rating'),
+        tooltip=['Date:T', 'Star Rating:Q', 'Num_Reviews:Q']
+    ).properties(
+        width=600,
+        height=200
+    )
+
+    # .interactive()
+
+    ##################### Display Charts Side by Side #####################
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader('Average Star Rating Over Time')
+        st.altair_chart(line_chart, use_container_width=True)
+
+    with col2:
+        st.subheader(f'Average Star Rating: {average_rating:.2f} ★')
+        st.altair_chart(chart, use_container_width=True)
+
+    # # Add instructions for interactivity
+    # st.markdown("""
+    # * **Drag** to move the chart
+    # * **Scroll** to zoom in and out
+    # * **Double-click** to reset the chart scale
+    # """)
+    # st.altair_chart(line_chart, use_container_width=True)
+
+
+    ##################### Reviews Table #####################
+    st.title('Reviews')
+    st.markdown("""
+    Tips:
+    * Double click to see the full description of each rating
+    """)
+
+    adjustable_table = st.checkbox('Adjustable table')
+    if adjustable_table:
+        values = st.slider(
+            "Slide to adjust width of dataframe",
+            200, 1000, 600
+        )
+
+    filtered_df = filtered_df.reset_index(drop=True)
+
+    if adjustable_table:
+        st.dataframe(
+            filtered_df[['month_year', 'ReviewDescription', 'StarRating']],
+            column_config={
+                'month_year': st.column_config.TextColumn(
+                    "Review Date",
+                    help="Date when the review was posted",
+                    width="small"
+                ),
+                'StarRating': st.column_config.NumberColumn(
+                    "Star Rating",
+                    help="Rating given by the reviewer",
+                    format="%d",
+                    width="small"
+                ),
+                'ReviewDescription': st.column_config.TextColumn(
+                    "Review Description",
+                    help="Full description of review",
+                    width="large"
+                )
+            },
+            use_container_width=False,
+            width=values
+        )
+    else:
+        st.dataframe(
+            filtered_df[['month_year', 'ReviewDescription', 'StarRating']],
+            column_config={
+                'month_year': st.column_config.TextColumn(
+                    "Review Date",
+                    help="Date when the review was posted",
+                    width="small"
+                ),
+                'StarRating': st.column_config.NumberColumn(
+                    "Star Rating",
+                    help="Rating given by the reviewer",
+                    format="%d",
+                    width="small"
+                ),
+                'ReviewDescription': st.column_config.TextColumn(
+                    "Review Description",
+                    help="Full description of review",
+                    width="large"
+                )
+            },
+            use_container_width=True
+        )
+
+
 # Display in wide mode
 st.set_page_config(layout="wide")
 base_url= st.secrets["FLASK_APP_URL"]
 
 
 ##################### Sidebar #####################
+# Display status updates
+if 'status' not in st.session_state:
+    st.session_state.status = 'Ready'
+
+if st.session_state.status:
+    if st.session_state.status == 'Completed':
+        st.sidebar.subheader(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
+        st.session_state.request_id = None
+        st.session_state.status = 'Ready'
+    elif 'Failed' in st.session_state.status:
+        st.sidebar.subheader(f':large_orange_circle: Scraping request for {st.session_state.res_name} has failed. Please try again with a different name')
+        st.session_state.request_id = None
+        st.session_state.status = 'Ready'
+    elif 'In Progress' in st.session_state.status:
+        st.sidebar.subheader(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
+
 # Sidebar with search bar and dropdown
 st.sidebar.header('Restaurant Selection')
 # restaurant_names = get_restaurant_names()
@@ -76,8 +266,6 @@ if 'request_id' not in st.session_state:
     st.session_state.request_id = None
 if 'request_res' not in st.session_state:
     st.session_state.request_res = None
-if 'status' not in st.session_state:
-    st.session_state.status = None
 
 # Dropdown list with filtered restaurant names
 selected_restaurant = st.sidebar.selectbox('Select a restaurant:', st.session_state.filtered_restaurant_names)
@@ -111,8 +299,9 @@ setTimeout(pollStatus, 80);
 st.markdown(polling_js, unsafe_allow_html=True)
 # Auto poll on intervals
 if st.session_state.request_id:
-    st_autorefresh(interval=80, key="poll_status")
-    print('Check status')
+    # Intervals: 1000 = 1s
+    st_autorefresh(interval=10000, key="poll_status")
+    print(f'Status: {st.session_state.status}')
     poll_status()
 ################################################################
 
@@ -121,18 +310,18 @@ if st.session_state.request_id:
 # Display the selected restaurant
 st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
 if selected_restaurant not in restaurant_names:
-    st.sidebar.subheader(':red[Restaurant not found!]')
-    st.sidebar.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
+    st.subheader(':red[Restaurant not found!]')
+    st.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
 
-    res_name = st.sidebar.text_input('Name of restaurant')
-    loc_name = st.sidebar.text_input('Location/Branch?')
-    review_limit = st.sidebar.number_input('Maximum no. of reviews to fetch:', min_value=1, value=100, step=1)
+    res_name = st.text_input('Name of restaurant')
+    loc_name = st.text_input('Location/Branch?')
+    review_limit = st.number_input('Maximum no. of reviews to fetch:', min_value=1, value=100, step=1)
 
-    generate_new_data = st.sidebar.button('Generate new data')
+    generate_new_data = st.button('Generate new data')
     if generate_new_data:
         st.session_state.res_name = res_name
         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
-        st.session_state.status = 'In Progress'
+        # st.session_state.status = 'In Progress'
 
     selected_df = pd.DataFrame(columns=['DateOfReview', 'StarRating', 'month_year', 'ReviewDescription'])
 else:
@@ -145,153 +334,37 @@ else:
     selected_df['DateOfReview'] = selected_df['DateOfReview'].dt.date
     selected_df = selected_df.reset_index(drop=True)
 
-
-# # Display status updates
-# if st.session_state.status:
-#     if st.session_state.status == 'Completed':
-#         st.toast(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
-#         st.session_state.request_id = None
-#         st.session_state.status = None
-#     elif 'Failed' in st.session_state.status:
-#         st.toast(f':large_orange_circle: Scraping request for {st.session_state.res_name} has failed. Please try again with a different name')
-#         st.session_state.request_id = None
-#         st.session_state.status = None
-#     elif 'In Progress' in st.session_state.status:
-#         st.toast(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
-
-col1, col2 = st.columns(2)
-with col1:
-    show_empty_reviews = st.checkbox('Include reviews with no description', True)
-with col2:
-    # Count the number of empty and non-empty reviews
-    empty_reviews_count = (selected_df['ReviewDescription'] == 'No description provided').sum()
-    non_empty_reviews_count = len(selected_df) - empty_reviews_count
-
-    if show_empty_reviews:
-        filtered_df = selected_df
-        st.write(f"Displaying {selected_df.shape[0]} Total Reviews ({empty_reviews_count} with no description)")
+    ai_review_exist = False
+    if ai_review_exist:
+        summary, pros, cons = ['summary', 'pros', 'cons']
     else:
-        filtered_df = selected_df[selected_df['ReviewDescription'] != 'No description provided']
-        st.write(f"Displaying {len(filtered_df)} reviews")
+        analyze_review_button = st.button('Get AI Summary of Review')
+        if analyze_review_button:
+            review_df = selected_df[selected_df['ReviewDescription'] != 'No description provided'][['StarRating', 'month_year', 'ReviewDescription']]
+            review_df['month_year'] = review_df['month_year'].astype(str)
+            review_summary = analyze_reviews(review_df)
 
-##################### Bar Chart #####################
-# Group by 'StarRating' and count the occurrences
-ratingGroupedDf = filtered_df.groupby('StarRating').size().reset_index(name='Count')
+            summary, pros, cons = split_response(review_summary)
 
-# Calculate the average star rating
-average_rating = round(filtered_df['StarRating'].mean(),2)
+    if analyze_review_button or ai_review_exist:
+        print("Summary:", summary)
+        print("Pros:", pros)
+        print("Cons:", cons)
 
-# Create the bar chart using Altair
-chart = alt.Chart(ratingGroupedDf).mark_bar().encode(
-    x=alt.X('StarRating:N', title='Star Rating', axis=alt.Axis(labelAngle=0)),
-    y=alt.Y('Count:Q', title='Count'),
-).properties(
-    width=600,
-    height=200
-)
+        
+        st.subheader("Summary of Reviews")
+        st.write(summary)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader(f"What they like about {selected_restaurant}:")
+            st.write(pros)
+        with col2:
+            st.subheader(f"What they dislike about {selected_restaurant}:")
+            st.write(cons)
 
-
-##################### Time Series Line Chart #####################
-# Group by 'month_year' and calculate the average star rating and count for each month
-monthlyGroupedDf = filtered_df.groupby('month_year')['StarRating'].agg(['mean', 'count']).reset_index()
-monthlyGroupedDf.columns = ['Date', 'Star Rating', 'Num_Reviews']
-
-# Round the StarRating to 2 decimal places
-monthlyGroupedDf['Star Rating'] = round(monthlyGroupedDf['Star Rating'], 2)
-print(monthlyGroupedDf.head(5))
-
-# Create the line chart using Altair with tooltips and point markers
-line_chart = alt.Chart(monthlyGroupedDf).mark_line(point=True).encode(
-    x=alt.X('Date:T', title='Date [Month]'),
-    y=alt.Y('Star Rating:Q', title='Average Star Rating'),
-    tooltip=['Date:T', 'Star Rating:Q', 'Num_Reviews:Q']
-).properties(
-    width=600,
-    height=200
-)
-
-# .interactive()
-
-##################### Display Charts Side by Side #####################
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader('Average Star Rating Over Time')
-    st.altair_chart(line_chart, use_container_width=True)
-
-with col2:
-    st.subheader(f'Average Star Rating: {average_rating:.2f} ★')
-    st.altair_chart(chart, use_container_width=True)
-
-# # Add instructions for interactivity
-# st.markdown("""
-# * **Drag** to move the chart
-# * **Scroll** to zoom in and out
-# * **Double-click** to reset the chart scale
-# """)
-# st.altair_chart(line_chart, use_container_width=True)
+    display_charts()
 
 
-##################### Reviews Table #####################
-st.title('Reviews')
-st.markdown("""
-Tips:
-* Double click to see the full description of each rating
-""")
 
-adjustable_table = st.checkbox('Adjustable table')
-if adjustable_table:
-    values = st.slider(
-        "Slide to adjust width of dataframe",
-        200, 1000, 600
-    )
 
-filtered_df = filtered_df.reset_index(drop=True)
-
-if adjustable_table:
-    st.dataframe(
-        filtered_df[['month_year', 'ReviewDescription', 'StarRating']],
-        column_config={
-            'month_year': st.column_config.TextColumn(
-                "Review Date",
-                help="Date when the review was posted",
-                width="small"
-            ),
-            'StarRating': st.column_config.NumberColumn(
-                "Star Rating",
-                help="Rating given by the reviewer",
-                format="%d",
-                width="small"
-            ),
-            'ReviewDescription': st.column_config.TextColumn(
-                "Review Description",
-                help="Full description of review",
-                width="large"
-            )
-        },
-        use_container_width=False,
-        width=values
-    )
-else:
-    st.dataframe(
-        filtered_df[['month_year', 'ReviewDescription', 'StarRating']],
-        column_config={
-            'month_year': st.column_config.TextColumn(
-                "Review Date",
-                help="Date when the review was posted",
-                width="small"
-            ),
-            'StarRating': st.column_config.NumberColumn(
-                "Star Rating",
-                help="Rating given by the reviewer",
-                format="%d",
-                width="small"
-            ),
-            'ReviewDescription': st.column_config.TextColumn(
-                "Review Description",
-                help="Full description of review",
-                width="large"
-            )
-        },
-        use_container_width=True
-    )
