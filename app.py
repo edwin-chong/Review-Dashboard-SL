@@ -38,6 +38,7 @@ def poll_status():
         response = requests.get(status_url)
         status = response.json().get('status')
         st.session_state.status = status
+        print(f"Status:{status}")
 
 def send_scraping_request(res_name, loc_name, review_limit):
     url = f'{base_url}/scrape'
@@ -60,10 +61,6 @@ def analyze_reviews(df):
         print("Success:")
         print(response)
         return response.json()
-        # result = []
-        # for response in responses:
-        #     result.append(response.choices[0].message.content)
-        # return result
     else:
         print(f"Request failed with status code: {response.status_code}")
         print(response.text)
@@ -74,7 +71,8 @@ def split_response(response):
     parts = response['summary'].split('\n\n')
     
     # The first part is the summary
-    summary = ':'.join(parts[0].split(':')[1:]).strip()
+    summary = parts[0]
+    # summary = ':'.join(parts[0].split(':')[1:]).strip()
     
     # The second part contains the pros, split by new lines after the first line
     pros = [line.strip('- ') for line in parts[1].split('\n')[1:]]
@@ -86,7 +84,7 @@ def split_response(response):
 
 
 def display_charts():
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([3,2])
     with col1:
         show_empty_reviews = st.checkbox('Include reviews with no description', True)
     with col2:
@@ -149,7 +147,8 @@ def display_charts():
     with col2:
         st.subheader(f'Average Star Rating: {average_rating:.2f} ★')
         st.altair_chart(chart, use_container_width=True)
-
+    st.divider()
+    return filtered_df
     # # Add instructions for interactivity
     # st.markdown("""
     # * **Drag** to move the chart
@@ -158,18 +157,21 @@ def display_charts():
     # """)
     # st.altair_chart(line_chart, use_container_width=True)
 
-
+def display_reviews_df(filtered_df):
     ##################### Reviews Table #####################
-    st.title('Reviews')
-    st.markdown("""
-    Tips:
-    * Double click to see the full description of each rating
-    """)
-
-    adjustable_table = st.checkbox('Adjustable table')
+    st.subheader('Reviews')
+            
+    col1, col2 = st.columns([4,1])
+    with col1:
+        st.markdown("""
+        :red[(Double click to see the full description of each rating)]
+        """)
+    with col2:
+        adjustable_table = st.checkbox('Adjustable table')
+    
     if adjustable_table:
         values = st.slider(
-            "Slide to adjust width of dataframe",
+            ":red[Drag slider to adjust width of dataframe]",
             200, 1000, 600
         )
 
@@ -247,14 +249,16 @@ if st.session_state.status:
         st.sidebar.subheader(f':large_yellow_circle: Scraping request for {st.session_state.res_name} sent! Please check back later!')
 
 # Sidebar with search bar and dropdown
-st.sidebar.header('Restaurant Selection')
+st.sidebar.header('Choose your restauant.')
+st.sidebar.markdown(':green[(If your desired restaurant is not found, you will have the option to generate the reviews.)]')
+st.sidebar.divider()
 # restaurant_names = get_restaurant_names()
 restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
 
 # Create a container in the sidebar for keyup functionality
 with st.sidebar:
     # Text input for searching in the sidebar
-    search_term = st_keyup("Enter a value", key="0")
+    search_term = st_keyup("Search for the name of your restaurant here", key="0")
 
     # Update session state with the search term
     st.session_state.search_term = search_term
@@ -268,7 +272,7 @@ if 'request_res' not in st.session_state:
     st.session_state.request_res = None
 
 # Dropdown list with filtered restaurant names
-selected_restaurant = st.sidebar.selectbox('Select a restaurant:', st.session_state.filtered_restaurant_names)
+selected_restaurant = st.sidebar.selectbox('Or select one from the list below:', st.session_state.filtered_restaurant_names)
 
 # Update the filtered restaurant names based on the search term
 if st.session_state.search_term:
@@ -308,7 +312,10 @@ if st.session_state.request_id:
 
 ##################### Main Content #####################
 # Display the selected restaurant
-st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
+col1, col2 = st.columns([3,1])
+with col1:
+    st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
+
 if selected_restaurant not in restaurant_names:
     st.subheader(':red[Restaurant not found!]')
     st.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
@@ -321,10 +328,13 @@ if selected_restaurant not in restaurant_names:
     if generate_new_data:
         st.session_state.res_name = res_name
         st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
+        poll_status()
         # st.session_state.status = 'In Progress'
 
     selected_df = pd.DataFrame(columns=['DateOfReview', 'StarRating', 'month_year', 'ReviewDescription'])
 else:
+    with col2:
+        analyze_review_button = st.button('Get AI Summary of Review')
     selected_df = data[selected_restaurant]
     # Format df columns
     selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
@@ -338,13 +348,14 @@ else:
     if ai_review_exist:
         summary, pros, cons = ['summary', 'pros', 'cons']
     else:
-        analyze_review_button = st.button('Get AI Summary of Review')
         if analyze_review_button:
             review_df = selected_df[selected_df['ReviewDescription'] != 'No description provided'][['StarRating', 'month_year', 'ReviewDescription']]
             review_df['month_year'] = review_df['month_year'].astype(str)
             review_summary = analyze_reviews(review_df)
 
             summary, pros, cons = split_response(review_summary)
+
+    filtered_df = display_charts()
 
     if analyze_review_button or ai_review_exist:
         print("Summary:", summary)
@@ -363,7 +374,8 @@ else:
             st.subheader(f"What they dislike about {selected_restaurant}:")
             st.write(cons)
 
-    display_charts()
+    
+    display_reviews_df(filtered_df)
 
 
 
