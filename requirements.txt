@@ -8,6 +8,7 @@ certifi==2024.7.4
 charset-normalizer==3.3.2
 click==8.1.7
 colorama==0.4.6
+DateTime==5.5
 gitdb==4.0.11
 GitPython==3.1.43
 idna==3.7
@@ -47,3 +48,4 @@ typing_extensions==4.12.2
 tzdata==2024.1
 urllib3==2.2.2
 watchdog==4.0.1
+zope.interface==6.4.post2
