@@ -35,6 +35,11 @@ def load_and_process_data(bucket_name, json_file_name):
 def check_for_updates(bucket_name, json_file_name, last_modified_time):
     response = s3.head_object(Bucket=bucket_name, Key=json_file_name)
     last_modified = response['LastModified']
+
+     # Convert last_modified to naive datetime for comparison
+    if last_modified.tzinfo is not None:
+        last_modified = last_modified.replace(tzinfo=None)
+        
     return last_modified > last_modified_time
 
 # Function to handle the status polling
