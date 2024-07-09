@@ -7,6 +7,7 @@ import altair as alt
 from st_keyup import st_keyup
 from streamlit_autorefresh import st_autorefresh
 from functools import lru_cache
+import datetime
 
 # Initialize the S3 client
 s3 = boto3.client('s3')
@@ -30,6 +31,11 @@ def load_and_process_data(bucket_name, json_file_name):
         df['DateOfReview'] = df['DateOfReview'].dt.date
         processed_data[restaurant] = df.reset_index(drop=True)
     return list(data.keys()), processed_data
+
+def check_for_updates(bucket_name, json_file_name, last_modified_time):
+    response = s3.head_object(Bucket=bucket_name, Key=json_file_name)
+    last_modified = response['LastModified']
+    return last_modified > last_modified_time
 
 # Function to handle the status polling
 def poll_status():
@@ -252,8 +258,11 @@ if st.session_state.status:
 st.sidebar.header('Choose your restauant.')
 st.sidebar.markdown(':green[(If your desired restaurant is not found, you will have the option to generate the reviews.)]')
 st.sidebar.divider()
-# restaurant_names = get_restaurant_names()
-restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
+
+last_modified_time = datetime.min
+if check_for_updates(bucket_name, json_file_name, last_modified_time):
+    restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
+    last_modified_time = datetime.now()
 
 # Create a container in the sidebar for keyup functionality
 with st.sidebar:
