@@ -7,7 +7,7 @@ import altair as alt
 from st_keyup import st_keyup
 from streamlit_autorefresh import st_autorefresh
 from functools import lru_cache
-import datetime
+from datetime import datetime
 
 # Initialize the S3 client
 s3 = boto3.client('s3')
