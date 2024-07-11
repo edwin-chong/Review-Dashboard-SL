@@ -39,7 +39,14 @@ def check_for_updates(bucket_name, json_file_name, last_modified_time):
      # Convert last_modified to naive datetime for comparison
     if last_modified.tzinfo is not None:
         last_modified = last_modified.replace(tzinfo=None)
-        
+
+    print(f'S3 last modified: {last_modified}')
+    print(f'Website last modified: {last_modified_time}')
+
+    if last_modified > last_modified_time:
+        print('Need to update')
+    else:
+        print('no need to update')
     return last_modified > last_modified_time
 
 # Function to handle the status polling
@@ -56,9 +63,9 @@ def send_scraping_request(res_name, loc_name, review_limit):
     data = {
         'business_name': f'{res_name} - {loc_name}',
         'sort_order': 'Newest',
-        'review_limit': review_limit
+        'review_limit': str(review_limit)
     }
-    response = requests.post(url, json=data)
+    response =  requests.post(url, json=data)
     request_id = response.json().get('request_id')
     return request_id
 
@@ -318,7 +325,7 @@ st.markdown(polling_js, unsafe_allow_html=True)
 # Auto poll on intervals
 if st.session_state.request_id:
     # Intervals: 1000 = 1s
-    st_autorefresh(interval=10000, key="poll_status")
+    st_autorefresh(interval=1000, key="poll_status")
     print(f'Status: {st.session_state.status}')
     poll_status()
 ################################################################
