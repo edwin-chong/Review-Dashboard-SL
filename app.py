@@ -39,6 +39,7 @@ def check_for_updates(bucket_name, json_file_name, last_modified_time):
      # Convert last_modified to naive datetime for comparison
     if last_modified.tzinfo is not None:
         last_modified = last_modified.replace(tzinfo=None)
+    last_modified_time = last_modified_time.replace(tzinfo=None)
 
     print(f'S3 last modified: {last_modified}')
     print(f'Website last modified: {last_modified_time}')
@@ -254,6 +255,14 @@ base_url= st.secrets["FLASK_APP_URL"]
 if 'status' not in st.session_state:
     st.session_state.status = 'Ready'
 
+if 'last_modified_time' not in st.session_state:
+    st.session_state.last_modified_time = datetime.min
+
+if 'restaurant_names' not in st.session_state:
+    st.session_state.restaurant_names = []
+if 'data' not in st.session_state:
+    st.session_state.data = {}
+
 if st.session_state.status:
     if st.session_state.status == 'Completed':
         st.sidebar.subheader(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
@@ -271,10 +280,16 @@ st.sidebar.header('Choose your restauant.')
 st.sidebar.markdown(':green[(If your desired restaurant is not found, you will have the option to generate the reviews.)]')
 st.sidebar.divider()
 
-last_modified_time = datetime.min
-if check_for_updates(bucket_name, json_file_name, last_modified_time):
+
+if check_for_updates(bucket_name, json_file_name, st.session_state.last_modified_time):
     restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
-    last_modified_time = datetime.now()
+    st.session_state.restaurant_names = restaurant_names
+    st.session_state.data = data
+    st.session_state.last_modified_time = datetime.now()
+    print(f'Updated last_modified_time: {st.session_state.last_modified_time}')
+else:
+    restaurant_names = st.session_state.restaurant_names
+    data = st.session_state.data
 
 # Create a container in the sidebar for keyup functionality
 with st.sidebar:
