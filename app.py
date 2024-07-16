@@ -9,6 +9,12 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 import logging
 import pytz
+from pandas.api.types import (
+    is_categorical_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_object_dtype,
+)
 
 # Set up logging
 logging.basicConfig(
@@ -93,6 +99,7 @@ def split_response(response):
     return summary, pros, cons
 
 def display_charts(selected_df):
+
     col1, col2 = st.columns([3, 2])
     with col1:
         show_empty_reviews = st.checkbox('Include reviews with no description', True)
@@ -129,6 +136,8 @@ def display_charts(selected_df):
     return filtered_df
 
 def display_reviews_df(filtered_df):
+    filtered_df = filter_dataframe(filtered_df)
+    st.write(f'Displaying {filtered_df.shape[0]} reviews')
     st.subheader('Reviews')
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -154,6 +163,95 @@ def initialize_session_state():
     if 'refresh_interval' not in st.session_state:
         st.session_state.refresh_interval = 300000  # Default to 5 minutes
 
+def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    # Try to convert datetimes into a standard format (datetime, no timezone)
+    for col in df.columns:
+        if is_object_dtype(df[col]):
+            try:
+                df[col] = pd.to_datetime(df[col])
+            except Exception:
+                pass
+
+        if is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.tz_localize(None)
+
+    cols_to_filter = ['StarRating', 'month_year']
+
+    # Initialize session state for filters
+    if 'filters' not in st.session_state:
+        st.session_state.filters = {col: None for col in cols_to_filter}
+
+    # Add reset button to clear filters
+    reset_button = st.button("Reset filters")
+
+    if reset_button:
+        st.session_state.filters = {col: None for col in cols_to_filter}
+
+    # to_filter_columns = st.multiselect("Filter dataframe on", cols_to_filter)
+    # modification_container = st.container()
+    modification_container = st.expander("Filters", expanded=True)
+
+    
+    with modification_container:
+        for column in cols_to_filter:
+            left, right = st.columns((1, 20))
+            # Treat columns with < 10 unique values as categorical
+            if is_categorical_dtype(df[column]) or df[column].nunique() < 10:
+                user_cat_input = right.multiselect(
+                    f"Values for {column}",
+                    df[column].unique(),
+                    default=st.session_state.filters[column] if st.session_state.filters[column] else list(df[column].unique()),
+                )
+                st.session_state.filters[column] = user_cat_input
+                df = df[df[column].isin(user_cat_input)]
+            elif is_numeric_dtype(df[column]):
+                _min = float(df[column].min())
+                _max = float(df[column].max())
+                step = (_max - _min) / 100
+                user_num_input = right.slider(
+                    f"Values for {column}",
+                    min_value=_min,
+                    max_value=_max,
+                    value=(_min, _max),
+                    step=step,
+                )
+                st.session_state.filters[column] = user_num_input
+                df = df[df[column].between(*user_num_input)]
+            elif is_datetime64_any_dtype(df[column]):
+                # Convert column to month and year format for display
+                df['MonthYear'] = df[column].dt.to_period('M').astype(str)
+
+                # Get unique month-year values and sort them
+                unique_month_years = sorted(df['MonthYear'].unique())
+
+                # User selects the start and end month-year
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_date_str = st.selectbox(f"Start date for {column}", unique_month_years)
+                with col2:
+                    end_date_str = st.selectbox(f"End date for {column}", sorted(unique_month_years, reverse=True))
+
+                # Convert the selected month-year values back to datetime for filtering
+                start_date = pd.to_datetime(start_date_str, format='%Y-%m')
+                end_date = pd.to_datetime(end_date_str, format='%Y-%m') + pd.offsets.MonthEnd(1)
+
+                # Ensure start_date is before end_date
+                if start_date > end_date:
+                    st.error("Start date must be before or equal to end date")
+                else:
+                    st.session_state.filters[column] = (start_date_str, end_date_str)
+                    # Filter the DataFrame based on the user input
+                    df = df.loc[df[column].between(start_date, end_date)]
+            else:
+                user_text_input = right.text_input(
+                    f"Substring or regex in {column}",
+                )
+                st.session_state.filters[column] = user_text_input
+                if user_text_input:
+                    df = df[df[column].astype(str).str.contains(user_text_input)]
+    df['month_year'] = df['month_year'].dt.strftime('%b-%Y')
+    return df
+    
 def main():
     initialize_session_state()
 
@@ -173,8 +271,8 @@ def main():
         restaurant_names = st.session_state.restaurant_names
         data = st.session_state.data
 
-    st.sidebar.header('Choose your restaurant.')
-    st.sidebar.markdown(':green[(If your desired restaurant is not found, you will have the option to generate the reviews.)]')
+    st.sidebar.title('Search for your restaurant from the list below.')
+    st.sidebar.subheader(':blue[If your desired restaurant is not found, there will be an option to extract the reviews.]')
     st.sidebar.divider()
 
     if st.session_state.status:
@@ -209,17 +307,13 @@ def main():
     logger.info(f'Status: {st.session_state.status}')
     poll_status()
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader(f'Selected Restaurant: :green[{selected_restaurant}]')
-
     if selected_restaurant not in restaurant_names:
         st.subheader(':red[Restaurant not found!]')
-        st.write('Please try a different name. If the restaurant is not found in the list, you can request for it. (Will take a few minutes depending on the number of reviews)')
+        st.write('Please try a different name. If the restaurant cannot be found from the list, you can request for it. (Will take up to 5 minutes, depending on the amount of reviews)')
 
-        res_name = st.text_input('Name of restaurant')
+        res_name = st.text_input('Name of restaurant :red[*]')
         loc_name = st.text_input('Location/Branch?')
-        review_limit = st.number_input('Maximum no. of reviews to fetch:', min_value=1, value=100, step=1)
+        review_limit = st.number_input('Maximum no. of reviews to fetch: :red[*]', min_value=1, value=100, step=1)
 
         generate_new_data = st.button('Generate new data')
         if generate_new_data:
@@ -233,8 +327,17 @@ def main():
 
         selected_df = pd.DataFrame(columns=['DateOfReview', 'StarRating', 'month_year', 'ReviewDescription'])
     else:
+        st.subheader("Selected Restaurant:")
+        st.title(f':green[{selected_restaurant}]')
+        st.divider()
+        st.subheader(f'What users are saying about :green[{selected_restaurant}]')
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write('1-gram')
         with col2:
-            analyze_review_button = st.button('Get AI Summary of Review')
+            st.write('2-gram')
+
         selected_df = data[selected_restaurant]
         selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
         selected_df = selected_df.sort_values(by='DateOfReview', ascending=False)
@@ -242,7 +345,9 @@ def main():
         selected_df['month_year'] = selected_df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
         selected_df['DateOfReview'] = selected_df['DateOfReview'].dt.date
         selected_df = selected_df.reset_index(drop=True)
+        filtered_df = display_charts(selected_df)
 
+        analyze_review_button = st.button('Get AI Summary of Review')
         ai_review_exist = False
         if ai_review_exist:
             summary, pros, cons = ['summary', 'pros', 'cons']
@@ -253,7 +358,7 @@ def main():
                 review_summary = analyze_reviews(review_df)
                 summary, pros, cons = split_response(review_summary)
 
-        filtered_df = display_charts(selected_df)
+       
 
         if analyze_review_button or ai_review_exist:
             logger.info("Summary:", summary)
@@ -270,7 +375,7 @@ def main():
             with col2:
                 st.subheader(f"What they dislike about {selected_restaurant}:")
                 st.write(cons)
-
+        
         display_reviews_df(filtered_df)
 
 if __name__ == "__main__":
