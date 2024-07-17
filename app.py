@@ -24,6 +24,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Turn off logging for botocore
+logging.getLogger('botocore').setLevel(logging.CRITICAL)
+
 # Initialize the S3 client
 s3 = boto3.client('s3')
 
@@ -84,7 +87,7 @@ def analyze_reviews(df):
     response = requests.post(url, json=data)
     if response.status_code == 200:
         logger.info("Success:")
-        logger.info(response)
+        logger.info(response.json())
         return response.json()
     else:
         logger.error(f"Request failed with status code: {response.status_code}")
@@ -138,7 +141,6 @@ def display_charts(selected_df):
 def display_reviews_df(filtered_df):
     filtered_df = filter_dataframe(filtered_df)
     st.write(f'Displaying {filtered_df.shape[0]} reviews')
-    st.subheader('Reviews')
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(":red[(Double click to see the full description of each rating)]")
@@ -169,6 +171,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if is_object_dtype(df[col]):
             try:
                 df[col] = pd.to_datetime(df[col])
+                logger.debug(col)
             except Exception:
                 pass
 
@@ -181,22 +184,26 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if 'filters' not in st.session_state:
         st.session_state.filters = {col: None for col in cols_to_filter}
 
-    # Add reset button to clear filters
-    reset_button = st.button("Reset filters")
+    col1, col2 = st.columns((5,1))
+    with col1:
+        st.subheader('Reviews')
+    with col2:
+        # Add reset button to clear filters
+        reset_button = st.button("Reset filters")
 
     if reset_button:
         st.session_state.filters = {col: None for col in cols_to_filter}
 
     # to_filter_columns = st.multiselect("Filter dataframe on", cols_to_filter)
     # modification_container = st.container()
-    modification_container = st.expander("Filters", expanded=True)
+    modification_container = st.expander("Filters", expanded=False)
 
     
     with modification_container:
         for column in cols_to_filter:
             left, right = st.columns((1, 20))
             # Treat columns with < 10 unique values as categorical
-            if is_categorical_dtype(df[column]) or df[column].nunique() < 10:
+            if isinstance(df[column].dtype, pd.CategoricalDtype) or df[column].nunique() < 10:
                 user_cat_input = right.multiselect(
                     f"Values for {column}",
                     df[column].unique(),
