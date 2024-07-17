@@ -94,12 +94,6 @@ def analyze_reviews(df):
         logger.error(response.text)
         return f"Error: {response.status_code} - {response.text}"
 
-def split_response(response):
-    parts = response['summary'].split('\n\n')
-    summary = parts[0]
-    pros = [line.strip('- ') for line in parts[1].split('\n')[1:]]
-    cons = [line.strip('- ') for line in parts[2].split('\n')[1:]]
-    return summary, pros, cons
 
 def display_charts(selected_df):
 
@@ -363,9 +357,8 @@ def main():
                 review_df = selected_df[selected_df['ReviewDescription'] != 'No description provided'][['StarRating', 'month_year', 'ReviewDescription']]
                 review_df['month_year'] = review_df['month_year'].astype(str)
                 review_summary = analyze_reviews(review_df)
-                summary, pros, cons = split_response(review_summary)
 
-       
+                summary, pros, cons = review_summary['summary'], review_summary['pros'], review_summary['cons']
 
         if analyze_review_button or ai_review_exist:
             logger.info("Summary:", summary)
