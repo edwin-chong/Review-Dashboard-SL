@@ -28,7 +28,12 @@ logger = logging.getLogger(__name__)
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
 
 # Initialize the S3 client
-s3 = boto3.client('s3')
+s3 = boto3.client(
+    's3',
+    aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+    region_name=st.secrets["AWS_DEFAULT_REGION"]
+)
 
 # Define the bucket name and the file name
 bucket_name = st.secrets["S3_BUCKET_NAME"]
@@ -101,9 +106,9 @@ def display_charts(selected_df):
     with col1:
         show_empty_reviews = st.checkbox('Include reviews with no description', True)
     with col2:
-        empty_reviews_count = (selected_df['ReviewDescription'] == 'No description provided').sum()
+        empty_reviews_count = (selected_df['ReviewDescription'] == 'nil').sum()
         non_empty_reviews_count = len(selected_df) - empty_reviews_count
-        filtered_df = selected_df if show_empty_reviews else selected_df[selected_df['ReviewDescription'] != 'No description provided']
+        filtered_df = selected_df if show_empty_reviews else selected_df[selected_df['ReviewDescription'] != 'nil']
         st.write(f"Displaying {len(filtered_df)} reviews")
 
     ratingGroupedDf = filtered_df.groupby('StarRating').size().reset_index(name='Count')
