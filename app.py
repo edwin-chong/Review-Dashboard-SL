@@ -46,7 +46,8 @@ def load_and_process_data(bucket_name, json_file_name):
     json_data = response['Body'].read().decode('utf-8')
     data = json.loads(json_data)
     processed_data = {}
-    for restaurant, reviews in data.items():
+    for restaurant, restaurant_info in data.items():
+        reviews = restaurant_info['data']
         df = pd.DataFrame(reviews)
         df['DateOfReview'] = pd.to_datetime(df['DateOfReview'], format='%Y-%m-%d')
         df = df.sort_values(by='DateOfReview', ascending=False)
@@ -98,7 +99,6 @@ def analyze_reviews(df):
         logger.error(f"Request failed with status code: {response.status_code}")
         logger.error(response.text)
         return f"Error: {response.status_code} - {response.text}"
-
 
 def display_charts(selected_df):
 
@@ -341,8 +341,10 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.write('1-gram')
+            # n1gram = ngrams['n1gram']
         with col2:
             st.write('2-gram')
+            # n2gram = ngrams['n2gram']
 
         selected_df = data[selected_restaurant]
         selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
