@@ -359,7 +359,7 @@ def main():
             summary, pros, cons = ['summary', 'pros', 'cons']
         else:
             if analyze_review_button:
-                review_df = selected_df[selected_df['ReviewDescription'] != 'No description provided'][['StarRating', 'month_year', 'ReviewDescription']]
+                review_df = selected_df[selected_df['ReviewDescription'] != 'nil'][['StarRating', 'month_year', 'ReviewDescription']]
                 review_df['month_year'] = review_df['month_year'].astype(str)
                 review_summary = analyze_reviews(review_df)
 
