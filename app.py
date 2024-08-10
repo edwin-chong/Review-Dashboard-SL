@@ -15,6 +15,7 @@ from pandas.api.types import (
     is_numeric_dtype,
     is_object_dtype,
 )
+import warnings
 
 # Set up logging
 logging.basicConfig(
@@ -23,6 +24,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Could not infer format.*")
 
 # Turn off logging for botocore
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
@@ -41,11 +45,16 @@ json_file_name = st.secrets["S3_JSON_NAME"]
 base_url = st.secrets["FLASK_APP_URL"]
 
 @st.cache_data(ttl=3600)
-def load_and_process_data(bucket_name, json_file_name):
+def load_and_process_data(bucket_name, json_file_name, bypass_cache=False):
+    if bypass_cache:
+        st.cache_data.clear()
+
     response = s3.get_object(Bucket=bucket_name, Key=json_file_name)
     json_data = response['Body'].read().decode('utf-8')
     data = json.loads(json_data)
-    processed_data = {}
+    reviews_df = {}
+    summary_dict = {}
+    ngrams_dict = {}
     for restaurant, restaurant_info in data.items():
         reviews = restaurant_info['data']
         df = pd.DataFrame(reviews)
@@ -54,9 +63,16 @@ def load_and_process_data(bucket_name, json_file_name):
         df['StarRating'] = pd.to_numeric(df['StarRating'])
         df['month_year'] = df['DateOfReview'].dt.to_period('M').dt.to_timestamp().dt.strftime('%b-%Y')
         df['DateOfReview'] = df['DateOfReview'].dt.date
-        processed_data[restaurant] = df.reset_index(drop=True)
-    logger.info('Data reloaded')
-    return list(data.keys()), processed_data
+        reviews_df[restaurant] = df.reset_index(drop=True)  
+
+        summary_dict[restaurant] = restaurant_info['summary']
+        ngrams_dict[restaurant] = restaurant_info['ngram']
+
+        # print('Restaurant info summary:')
+        # print(restaurant_info['summary'])
+
+    logger.info('reviews_df reloaded')
+    return list(reviews_df.keys()), reviews_df, summary_dict, ngrams_dict
 
 def check_for_updates(bucket_name, json_file_name):
     response = s3.head_object(Bucket=bucket_name, Key=json_file_name)
@@ -79,18 +95,18 @@ def poll_status():
 
 def send_scraping_request(res_name, loc_name, review_limit):
     url = f'{base_url}/scrape'
-    data = {
+    reviews_df = {
         'business_name': f'{res_name} - {loc_name}',
         'sort_order': 'Newest',
         'review_limit': str(review_limit)
     }
-    response = requests.post(url, json=data)
+    response = requests.post(url, json=reviews_df)
     return response.json().get('request_id')
 
 def analyze_reviews(df):
     url = f'{base_url}/analyze'
-    data = {"reviews": df.to_dict(orient='records')}
-    response = requests.post(url, json=data)
+    reviews_df = {"reviews": df.to_dict(orient='records')}
+    response = requests.post(url, json=reviews_df)
     if response.status_code == 200:
         logger.info("Success:")
         logger.info(response.json())
@@ -107,7 +123,7 @@ def display_charts(selected_df):
         show_empty_reviews = st.checkbox('Include reviews with no description', True)
     with col2:
         empty_reviews_count = (selected_df['ReviewDescription'] == 'nil').sum()
-        non_empty_reviews_count = len(selected_df) - empty_reviews_count
+        # non_empty_reviews_count = len(selected_df) - empty_reviews_count
         filtered_df = selected_df if show_empty_reviews else selected_df[selected_df['ReviewDescription'] != 'nil']
         st.write(f"Displaying {len(filtered_df)} reviews")
 
@@ -157,8 +173,12 @@ def initialize_session_state():
         st.session_state.last_modified_time = datetime.min.replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Singapore'))
     if 'restaurant_names' not in st.session_state:
         st.session_state.restaurant_names = []
-    if 'data' not in st.session_state:
-        st.session_state.data = {}
+    if 'reviews_df' not in st.session_state:
+        st.session_state.reviews_df = {}
+    if 'summary_dict' not in st.session_state:
+        st.session_state.summary_dict = {}
+    if 'ngrams_dict' not in st.session_state:
+        st.session_state.ngrams_dict = {}
     if 'request_id' not in st.session_state:
         st.session_state.request_id = None
     if 'refresh_interval' not in st.session_state:
@@ -193,69 +213,95 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if reset_button:
         st.session_state.filters = {col: None for col in cols_to_filter}
 
-    # to_filter_columns = st.multiselect("Filter dataframe on", cols_to_filter)
-    # modification_container = st.container()
     modification_container = st.expander("Filters", expanded=False)
 
     
     with modification_container:
-        for column in cols_to_filter:
+    # Handle 'StarRating' column
+        if 'StarRating' in cols_to_filter:
             left, right = st.columns((1, 20))
-            # Treat columns with < 10 unique values as categorical
-            if isinstance(df[column].dtype, pd.CategoricalDtype) or df[column].nunique() < 10:
-                user_cat_input = right.multiselect(
-                    f"Values for {column}",
-                    df[column].unique(),
-                    default=st.session_state.filters[column] if st.session_state.filters[column] else list(df[column].unique()),
-                )
-                st.session_state.filters[column] = user_cat_input
-                df = df[df[column].isin(user_cat_input)]
-            elif is_numeric_dtype(df[column]):
-                _min = float(df[column].min())
-                _max = float(df[column].max())
-                step = (_max - _min) / 100
-                user_num_input = right.slider(
-                    f"Values for {column}",
-                    min_value=_min,
-                    max_value=_max,
-                    value=(_min, _max),
-                    step=step,
-                )
-                st.session_state.filters[column] = user_num_input
-                df = df[df[column].between(*user_num_input)]
-            elif is_datetime64_any_dtype(df[column]):
-                # Convert column to month and year format for display
-                df['MonthYear'] = df[column].dt.to_period('M').astype(str)
+            
+            # Set fixed min and max values for StarRating
+            min_value = 1
+            max_value = 5
+            
+            # Retrieve or set default slider values
+            default_values = st.session_state.filters.get('StarRating', (min_value, max_value))
+            
+            # Ensure default_values is a tuple (min_value, max_value)
+            if not isinstance(default_values, tuple):
+                default_values = (min_value, max_value)
 
-                # Get unique month-year values and sort them
-                unique_month_years = sorted(df['MonthYear'].unique())
+            user_num_input = right.slider(
+                "Filter Star Rating",
+                min_value=min_value,
+                max_value=max_value,
+                value=default_values,
+                step=1,
+            )
+            # Ensure the output is a tuple
+            if isinstance(user_num_input, int):
+                user_num_input = (user_num_input, user_num_input)
 
-                # User selects the start and end month-year
-                col1, col2 = st.columns(2)
-                with col1:
-                    start_date_str = st.selectbox(f"Start date for {column}", unique_month_years)
-                with col2:
-                    end_date_str = st.selectbox(f"End date for {column}", sorted(unique_month_years, reverse=True))
+            st.session_state.filters['StarRating'] = user_num_input
+            
+            # Apply the filter
+            df = df[df['StarRating'].between(*user_num_input)]
 
-                # Convert the selected month-year values back to datetime for filtering
-                start_date = pd.to_datetime(start_date_str, format='%Y-%m')
-                end_date = pd.to_datetime(end_date_str, format='%Y-%m') + pd.offsets.MonthEnd(1)
+            # Check if the filtered DataFrame is empty
+            if df.empty:
+                st.warning("No results found for the selected Star Rating.")
+                st.stop()
 
-                # Ensure start_date is before end_date
-                if start_date > end_date:
-                    st.error("Start date must be before or equal to end date")
-                else:
-                    st.session_state.filters[column] = (start_date_str, end_date_str)
-                    # Filter the DataFrame based on the user input
-                    df = df.loc[df[column].between(start_date, end_date)]
+        # Handle 'month_year' column
+        if 'month_year' in cols_to_filter:
+            left, right = st.columns((1, 20))
+            
+            # Convert datetime column to month-year format
+            df['MonthYear'] = df['month_year'].dt.to_period('M').astype(str)
+            
+            # Get unique sorted month-year values
+            unique_month_years = sorted(df['MonthYear'].unique())
+            
+            # Retrieve or set default start and end dates
+            default_values = st.session_state.filters.get('month_year', (unique_month_years[0], unique_month_years[-1]))
+
+            if not isinstance(default_values, tuple) or default_values is None:
+                default_values = (unique_month_years[0], unique_month_years[-1])
+
+            default_start, default_end = default_values
+            
+            if default_start not in unique_month_years:
+                default_start = unique_month_years[0]
+            if default_end not in unique_month_years:
+                default_end = unique_month_years[-1]
+            
+            # Display selection boxes for date range
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date_str = st.selectbox("Start date", unique_month_years, index=unique_month_years.index(default_start))
+            with col2:
+                end_date_str = st.selectbox("End date", unique_month_years, index=unique_month_years.index(default_end))
+            
+            # Convert selected month-year strings back to datetime objects for filtering
+            start_date = pd.to_datetime(start_date_str, format='%Y-%m')
+            end_date = pd.to_datetime(end_date_str, format='%Y-%m') + pd.offsets.MonthEnd(1)
+            
+            # Validate and apply the date range filter
+            if start_date > end_date:
+                st.error("Start date must be before or equal to end date")
             else:
-                user_text_input = right.text_input(
-                    f"Substring or regex in {column}",
-                )
-                st.session_state.filters[column] = user_text_input
-                if user_text_input:
-                    df = df[df[column].astype(str).str.contains(user_text_input)]
-    df['month_year'] = df['month_year'].dt.strftime('%b-%Y')
+                st.session_state.filters['month_year'] = (start_date_str, end_date_str)
+                df = df.loc[df['month_year'].between(start_date, end_date)]
+
+                # Check if the filtered DataFrame is empty
+                if df.empty:
+                    st.warning("No results found for the selected date range.")
+                    st.stop()
+
+            # Convert 'month_year' to desired string format for display
+            df['month_year'] = df['month_year'].dt.strftime('%b-%Y')
+
     return df
     
 def main():
@@ -268,15 +314,19 @@ def main():
     logger.info(f'Cached DB last modified date: {st.session_state.last_modified_time}')
 
     if updated_time > st.session_state.last_modified_time:
-        restaurant_names, data = load_and_process_data(bucket_name, json_file_name)
+        restaurant_names, reviews_df, summary_dict, ngrams_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
         st.session_state.restaurant_names = restaurant_names
-        st.session_state.data = data
+        st.session_state.reviews_df = reviews_df
+        st.session_state.summary_dict = summary_dict
+        st.session_state.ngrams_dict = ngrams_dict
         st.session_state.last_modified_time = updated_time
         logger.info(f'Updated DB last modified time: {st.session_state.last_modified_time}')
     else:
         restaurant_names = st.session_state.restaurant_names
-        data = st.session_state.data
-
+        reviews_df = st.session_state.reviews_df
+        summary_dict = st.session_state.summary_dict
+        ngrams_dict = st.session_state.ngrams_dict
+        
     st.sidebar.title('Search for your restaurant from the list below.')
     st.sidebar.subheader(':blue[If your desired restaurant is not found, there will be an option to extract the reviews.]')
     st.sidebar.divider()
@@ -284,6 +334,7 @@ def main():
     if st.session_state.status:
         if st.session_state.status == 'Completed':
             st.sidebar.subheader(f':large_green_circle: Scraping request for {st.session_state.res_name} has completed, please refresh page!')
+            st.cache_data.clear()
             st.session_state.request_id = None
             st.session_state.status = 'Ready'
             st.session_state.refresh_interval = 300000  # Reset to 5 minutes
@@ -321,7 +372,7 @@ def main():
         loc_name = st.text_input('Location/Branch?')
         review_limit = st.number_input('Maximum no. of reviews to fetch: :red[*]', min_value=1, value=100, step=1)
 
-        generate_new_data = st.button('Generate new data')
+        generate_new_data = st.button('Scrape reviews')
         if generate_new_data:
             st.session_state.res_name = res_name
             st.session_state.request_id = send_scraping_request(res_name, loc_name, review_limit)
@@ -346,7 +397,7 @@ def main():
             st.write('2-gram')
             # n2gram = ngrams['n2gram']
 
-        selected_df = data[selected_restaurant]
+        selected_df = reviews_df[selected_restaurant]
         selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
         selected_df = selected_df.sort_values(by='DateOfReview', ascending=False)
         selected_df['StarRating'] = pd.to_numeric(selected_df['StarRating'])
@@ -355,19 +406,22 @@ def main():
         selected_df = selected_df.reset_index(drop=True)
         filtered_df = display_charts(selected_df)
 
-        analyze_review_button = st.button('Get AI Summary of Review')
-        ai_review_exist = False
-        if ai_review_exist:
-            summary, pros, cons = ['summary', 'pros', 'cons']
-        else:
-            if analyze_review_button:
-                review_df = selected_df[selected_df['ReviewDescription'] != 'nil'][['StarRating', 'month_year', 'ReviewDescription']]
-                review_df['month_year'] = review_df['month_year'].astype(str)
-                review_summary = analyze_reviews(review_df)
+        analyze_review_button = st.button('Generate AI Summary of Review')
 
-                summary, pros, cons = review_summary['summary'], review_summary['pros'], review_summary['cons']
+        summary = summary_dict[selected_restaurant]['summary']
+        pros = summary_dict[selected_restaurant]['pros']
+        cons = summary_dict[selected_restaurant]['cons']
 
-        if analyze_review_button or ai_review_exist:
+
+        # else:
+        #     if analyze_review_button:
+        #         review_df = selected_df[selected_df['ReviewDescription'] != 'nil'][['StarRating', 'month_year', 'ReviewDescription']]
+        #         review_df['month_year'] = review_df['month_year'].astype(str)
+        #         review_summary = analyze_reviews(review_df)
+
+        #         summary, pros, cons = review_summary['summary'], review_summary['pros'], review_summary['cons']
+
+        if analyze_review_button:
             logger.info("Summary:", summary)
             logger.info("Pros:", pros)
             logger.info("Cons:", cons)
