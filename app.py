@@ -394,9 +394,9 @@ def main():
         st.divider()
         
         st.subheader(f'What users are saying about :green[{selected_restaurant}]')
-        last_modified_ngram = last_modified_dict[selected_restaurant]['ngram']
-        last_modified_ngram = 'NA' if last_modified_ngram == '' else last_modified_ngram
-        st.write(f'Last fetched date: {last_modified_ngram}')
+        # last_modified_ngram = last_modified_dict[selected_restaurant]['ngram']
+        # last_modified_ngram = 'NA' if last_modified_ngram == '' else last_modified_ngram
+        # st.write(f'Last fetched date: {last_modified_ngram}')
 
         # col1, col2 = st.columns(2)
         # with col1:
