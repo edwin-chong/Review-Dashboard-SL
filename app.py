@@ -42,7 +42,7 @@ s3 = boto3.client(
 # Define the bucket name and the file name
 bucket_name = st.secrets["S3_BUCKET_NAME"]
 json_file_name = st.secrets["S3_JSON_NAME"]
-base_url = st.secrets["FLASK_APP_URL"]
+flask_url = st.secrets["FLASK_APP_URL"]
 
 @st.cache_data(ttl=3600)
 def load_and_process_data(bucket_name, json_file_name, bypass_cache=False):
@@ -55,6 +55,7 @@ def load_and_process_data(bucket_name, json_file_name, bypass_cache=False):
     reviews_df = {}
     summary_dict = {}
     ngrams_dict = {}
+    last_modified_dict = {}
     for restaurant, restaurant_info in data.items():
         reviews = restaurant_info['data']
         df = pd.DataFrame(reviews)
@@ -67,12 +68,13 @@ def load_and_process_data(bucket_name, json_file_name, bypass_cache=False):
 
         summary_dict[restaurant] = restaurant_info['summary']
         ngrams_dict[restaurant] = restaurant_info['ngram']
+        last_modified_dict[restaurant] = restaurant_info['last_modified']
 
-        # print('Restaurant info summary:')
-        # print(restaurant_info['summary'])
+        print('Restaurant info summary:')
+        print(restaurant_info['last_modified'])
 
     logger.info('reviews_df reloaded')
-    return list(reviews_df.keys()), reviews_df, summary_dict, ngrams_dict
+    return list(reviews_df.keys()), reviews_df, summary_dict, ngrams_dict, last_modified_dict
 
 def check_for_updates(bucket_name, json_file_name):
     response = s3.head_object(Bucket=bucket_name, Key=json_file_name)
@@ -87,14 +89,14 @@ def check_for_updates(bucket_name, json_file_name):
 def poll_status():
     logger.info('Polling status')
     if st.session_state.request_id:
-        status_url = f'{base_url}/status/{st.session_state.request_id}'
+        status_url = f'{flask_url}/status/{st.session_state.request_id}'
         response = requests.get(status_url)
         status = response.json().get('status')
         st.session_state.status = status
         logger.info(f"Status: {status}")
 
 def send_scraping_request(res_name, loc_name, review_limit):
-    url = f'{base_url}/scrape'
+    url = f'{flask_url}/scrape'
     reviews_df = {
         'business_name': f'{res_name} - {loc_name}',
         'sort_order': 'Newest',
@@ -103,18 +105,14 @@ def send_scraping_request(res_name, loc_name, review_limit):
     response = requests.post(url, json=reviews_df)
     return response.json().get('request_id')
 
-def analyze_reviews(df):
-    url = f'{base_url}/analyze'
-    reviews_df = {"reviews": df.to_dict(orient='records')}
+def analyze_reviews(res_name, df):
+    url = f'{flask_url}/analyze'
+    reviews_df = {"res_name": res_name, "reviews": df.to_dict(orient='records')}
     response = requests.post(url, json=reviews_df)
     if response.status_code == 200:
         logger.info("Success:")
-        logger.info(response.json())
-        return response.json()
     else:
         logger.error(f"Request failed with status code: {response.status_code}")
-        logger.error(response.text)
-        return f"Error: {response.status_code} - {response.text}"
 
 def display_charts(selected_df):
 
@@ -122,10 +120,8 @@ def display_charts(selected_df):
     with col1:
         show_empty_reviews = st.checkbox('Include reviews with no description', True)
     with col2:
-        empty_reviews_count = (selected_df['ReviewDescription'] == 'nil').sum()
-        # non_empty_reviews_count = len(selected_df) - empty_reviews_count
         filtered_df = selected_df if show_empty_reviews else selected_df[selected_df['ReviewDescription'] != 'nil']
-        st.write(f"Displaying {len(filtered_df)} reviews")
+        st.write(f"Displaying {len(filtered_df)} reviews") # Showing 100
 
     ratingGroupedDf = filtered_df.groupby('StarRating').size().reset_index(name='Count')
     average_rating = round(filtered_df['StarRating'].mean(), 2)
@@ -155,7 +151,7 @@ def display_charts(selected_df):
 
 def display_reviews_df(filtered_df):
     filtered_df = filter_dataframe(filtered_df)
-    st.write(f'Displaying {filtered_df.shape[0]} reviews')
+    st.write(f'Displaying {len(filtered_df)} reviews') # showing 98
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(":red[(Double click to see the full description of each rating)]")
@@ -179,6 +175,8 @@ def initialize_session_state():
         st.session_state.summary_dict = {}
     if 'ngrams_dict' not in st.session_state:
         st.session_state.ngrams_dict = {}
+    if 'last_modified_dict' not in st.session_state:
+        st.session_state.last_modified_dict = {}
     if 'request_id' not in st.session_state:
         st.session_state.request_id = None
     if 'refresh_interval' not in st.session_state:
@@ -219,7 +217,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     with modification_container:
     # Handle 'StarRating' column
         if 'StarRating' in cols_to_filter:
-            left, right = st.columns((1, 20))
+            _, right = st.columns((1, 20))
             
             # Set fixed min and max values for StarRating
             min_value = 1
@@ -264,15 +262,16 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             unique_month_years = sorted(df['MonthYear'].unique())
             
             # Retrieve or set default start and end dates
-            default_values = st.session_state.filters.get('month_year', (unique_month_years[0], unique_month_years[-1]))
+            # default_values = st.session_state.filters.get('month_year', (unique_month_years[0], unique_month_years[-1]))
 
-            if not isinstance(default_values, tuple) or default_values is None:
-                default_values = (unique_month_years[0], unique_month_years[-1])
-
+            # if not isinstance(default_values, tuple) or default_values is None:
+            default_values = (unique_month_years[0], unique_month_years[-1])
+            
             default_start, default_end = default_values
             
             if default_start not in unique_month_years:
                 default_start = unique_month_years[0]
+                
             if default_end not in unique_month_years:
                 default_end = unique_month_years[-1]
             
@@ -314,18 +313,20 @@ def main():
     logger.info(f'Cached DB last modified date: {st.session_state.last_modified_time}')
 
     if updated_time > st.session_state.last_modified_time:
-        restaurant_names, reviews_df, summary_dict, ngrams_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
+        restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
         st.session_state.restaurant_names = restaurant_names
         st.session_state.reviews_df = reviews_df
         st.session_state.summary_dict = summary_dict
         st.session_state.ngrams_dict = ngrams_dict
         st.session_state.last_modified_time = updated_time
+        st.session_state.last_modified_dict = last_modified_dict
         logger.info(f'Updated DB last modified time: {st.session_state.last_modified_time}')
     else:
         restaurant_names = st.session_state.restaurant_names
         reviews_df = st.session_state.reviews_df
         summary_dict = st.session_state.summary_dict
         ngrams_dict = st.session_state.ngrams_dict
+        last_modified_dict = st.session_state.last_modified_dict
         
     st.sidebar.title('Search for your restaurant from the list below.')
     st.sidebar.subheader(':blue[If your desired restaurant is not found, there will be an option to extract the reviews.]')
@@ -386,16 +387,24 @@ def main():
     else:
         st.subheader("Selected Restaurant:")
         st.title(f':green[{selected_restaurant}]')
+        last_modified_scrape = last_modified_dict[selected_restaurant]['scrape']
+        last_modified_scrape = 'NA' if last_modified_scrape == '' else last_modified_scrape
+        st.write(f'Last fetched date: {last_modified_scrape}')
+        
         st.divider()
+        
         st.subheader(f'What users are saying about :green[{selected_restaurant}]')
+        last_modified_ngram = last_modified_dict[selected_restaurant]['ngram']
+        last_modified_ngram = 'NA' if last_modified_ngram == '' else last_modified_ngram
+        st.write(f'Last fetched date: {last_modified_ngram}')
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write('1-gram')
-            # n1gram = ngrams['n1gram']
-        with col2:
-            st.write('2-gram')
-            # n2gram = ngrams['n2gram']
+        # col1, col2 = st.columns(2)
+        # with col1:
+            # st.write('1-gram')
+            # display_wordcloud(ngrams['onegram'])
+        # with col2:
+            # st.write('2-gram')
+            # display_wordcloud(ngrams['twogram'])
 
         selected_df = reviews_df[selected_restaurant]
         selected_df['DateOfReview'] = pd.to_datetime(selected_df['DateOfReview'], format='%Y-%m-%d')
@@ -407,35 +416,32 @@ def main():
         filtered_df = display_charts(selected_df)
 
         analyze_review_button = st.button('Generate AI Summary of Review')
-
+        
+        if analyze_review_button:
+            analyze_reviews(selected_restaurant, selected_df[['ReviewDescription', 'StarRating']])
+            restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
+        
         summary = summary_dict[selected_restaurant]['summary']
         pros = summary_dict[selected_restaurant]['pros']
         cons = summary_dict[selected_restaurant]['cons']
 
+        logger.info(f"Summary: {summary}")
+        logger.info(f"Pros: {pros}")
+        logger.info(f"Cons: {cons}")
 
-        # else:
-        #     if analyze_review_button:
-        #         review_df = selected_df[selected_df['ReviewDescription'] != 'nil'][['StarRating', 'month_year', 'ReviewDescription']]
-        #         review_df['month_year'] = review_df['month_year'].astype(str)
-        #         review_summary = analyze_reviews(review_df)
+        st.subheader("Summary of Reviews")
+        last_modified_summary = last_modified_dict[selected_restaurant]['summary']
+        last_modified_summary = 'NA' if last_modified_summary == '' else last_modified_summary
+        st.write(f'Last fetched date: {last_modified_summary}')
+        st.write(summary)
 
-        #         summary, pros, cons = review_summary['summary'], review_summary['pros'], review_summary['cons']
-
-        if analyze_review_button:
-            logger.info("Summary:", summary)
-            logger.info("Pros:", pros)
-            logger.info("Cons:", cons)
-
-            st.subheader("Summary of Reviews")
-            st.write(summary)
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(f"What they like about {selected_restaurant}:")
-                st.write(pros)
-            with col2:
-                st.subheader(f"What they dislike about {selected_restaurant}:")
-                st.write(cons)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader(f"What they like about {selected_restaurant}:")
+            st.write(pros)
+        with col2:
+            st.subheader(f"What they dislike about {selected_restaurant}:")
+            st.write(cons)
         
         display_reviews_df(filtered_df)
 
