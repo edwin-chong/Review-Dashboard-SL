@@ -217,7 +217,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         st.subheader('Reviews')
     with col2:
         # Add reset button to clear filters
-        reset_button = st.button("Reset filters")
+        reset_button = st.button(':red[Reset filters]')
 
     if reset_button:
         st.session_state.filters = {col: None for col in cols_to_filter}
@@ -404,11 +404,12 @@ def main():
             last_modified_scrape = 'NA' if last_modified_scrape == '' else last_modified_scrape
             st.write(f'Last fetched date: {last_modified_scrape}')
         with col2:
-            # st.markdown(":red[(Double click to see the full description of each rating)]")
             remove_review_button = st.button(':red[DELETE INFORMATION FOR THIS RESTAURANT]')
             if remove_review_button:
                 remove_review(selected_restaurant)
                 restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
+                st.session_state.filtered_restaurant_names = restaurant_names
+                st.rerun()
         
         st.divider()
         
@@ -434,7 +435,7 @@ def main():
         selected_df = selected_df.reset_index(drop=True)
         filtered_df = display_charts(selected_df)
 
-        analyze_review_button = st.button('Generate AI Summary of Review')
+        analyze_review_button = st.button(':green[Generate AI Summary of Review]')
         
         if analyze_review_button:
             analyze_reviews(selected_restaurant, selected_df[['ReviewDescription', 'StarRating']])
