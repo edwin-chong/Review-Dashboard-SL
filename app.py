@@ -365,14 +365,14 @@ def main():
     if 'filtered_restaurant_names' not in st.session_state:
         st.session_state.filtered_restaurant_names = restaurant_names
 
-    selected_restaurant = st.sidebar.selectbox('Or select one from the list below:', st.session_state.filtered_restaurant_names)
-
     if st.session_state.search_term:
         st.session_state.filtered_restaurant_names = [name for name in restaurant_names if st.session_state.search_term.lower() in name.lower()]
     else:
         st.session_state.filtered_restaurant_names = restaurant_names
 
     st_autorefresh(interval=st.session_state.refresh_interval, key="poll_status")
+    selected_restaurant = st.sidebar.selectbox('Or select one from the list below:', st.session_state.filtered_restaurant_names)
+
     logger.info(f'Status: {st.session_state.status}')
     poll_status()
 
