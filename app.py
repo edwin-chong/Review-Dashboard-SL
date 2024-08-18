@@ -408,7 +408,7 @@ def main():
             remove_review_button = st.button(':red[DELETE INFORMATION FOR THIS RESTAURANT]')
             if remove_review_button:
                 remove_review(selected_restaurant)
-                st.rerun()
+                restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
         
         st.divider()
         
