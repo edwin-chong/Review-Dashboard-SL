@@ -114,6 +114,17 @@ def analyze_reviews(res_name, df):
     else:
         logger.error(f"Request failed with status code: {response.status_code}")
 
+def remove_review(res_name):
+    url = f'{flask_url}/remove_review/{res_name}'
+    response = requests.delete(url)
+    if response.status_code == 200:
+        logger.info(f"Review information for {res_name} has been removed")
+    elif response.status_code == 404:
+        logger.info(f'Review information for {res_name} not found')
+    else:
+        logger.error(f"Request failed with status code: {response.status_code}")
+
+
 def display_charts(selected_df):
 
     col1, col2 = st.columns([3, 2])
@@ -386,10 +397,18 @@ def main():
         selected_df = pd.DataFrame(columns=['DateOfReview', 'StarRating', 'month_year', 'ReviewDescription'])
     else:
         st.subheader("Selected Restaurant:")
-        st.title(f':green[{selected_restaurant}]')
-        last_modified_scrape = last_modified_dict[selected_restaurant]['scrape']
-        last_modified_scrape = 'NA' if last_modified_scrape == '' else last_modified_scrape
-        st.write(f'Last fetched date: {last_modified_scrape}')
+        col1, col2 = st.columns((1,1))
+        with col1:
+            st.title(f':green[{selected_restaurant}]')
+            last_modified_scrape = last_modified_dict[selected_restaurant]['scrape']
+            last_modified_scrape = 'NA' if last_modified_scrape == '' else last_modified_scrape
+            st.write(f'Last fetched date: {last_modified_scrape}')
+        with col2:
+            # st.markdown(":red[(Double click to see the full description of each rating)]")
+            remove_review_button = st.button(':red[DELETE INFORMATION FOR THIS RESTAURANT]')
+            if remove_review_button:
+                remove_review(selected_restaurant)
+                st.rerun()
         
         st.divider()
         
