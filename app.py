@@ -403,13 +403,13 @@ def main():
             last_modified_scrape = last_modified_dict[selected_restaurant]['scrape']
             last_modified_scrape = 'NA' if last_modified_scrape == '' else last_modified_scrape
             st.write(f'Last fetched date: {last_modified_scrape}')
-        with col2:
-            remove_review_button = st.button(':red[DELETE INFORMATION FOR THIS RESTAURANT]')
-            if remove_review_button:
-                remove_review(selected_restaurant)
-                restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
-                st.session_state.filtered_restaurant_names = restaurant_names
-                st.rerun()
+        # with col2:
+        #     remove_review_button = st.button(':red[DELETE INFORMATION FOR THIS RESTAURANT]')
+        #     if remove_review_button:
+        #         remove_review(selected_restaurant)
+        #         restaurant_names, reviews_df, summary_dict, ngrams_dict, last_modified_dict = load_and_process_data(bucket_name, json_file_name, bypass_cache=True)
+        #         st.session_state.filtered_restaurant_names = restaurant_names
+        #         st.rerun()
         
         st.divider()
         
